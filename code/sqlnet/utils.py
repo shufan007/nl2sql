@@ -13,6 +13,8 @@ from sqlnet.diff2 import digit_distance_search
 from functools import lru_cache
 import re
 
+from sqlnet.glob_define import  __DEBUG__
+
 @lru_cache(None)
 def my_scorer(t, c):
 	return (1 - abs(len(t) - len(c)) / max(len(t), len(c))) * process.default_scorer(t, c)
@@ -175,7 +177,8 @@ def justify_col_type(table):
 	return table
 
 
-def load_data(sql_paths, table_paths, use_small=False):
+def load_data(sql_paths, table_paths, sample_size=None):
+	print("sample_size:  ", sample_size)
 	if not isinstance(sql_paths, list):
 		sql_paths = (sql_paths,)
 	if not isinstance(table_paths, list):
@@ -187,7 +190,7 @@ def load_data(sql_paths, table_paths, use_small=False):
 		with open(SQL_PATH, encoding='utf-8') as inf:
 			for idx, line in enumerate(inf):
 				sql = json.loads(line.strip())
-				if use_small and idx >= 1000:
+				if sample_size is not None and idx >= sample_size:
 					break
 				sql_data.append(sql)
 		print("Loaded %d data from %s" % (len(sql_data), SQL_PATH))
@@ -208,7 +211,7 @@ def load_data(sql_paths, table_paths, use_small=False):
 	return ret_sql_data, table_data
 
 
-def load_dataset(data_dir='../data', toy=False, use_small=False, mode='train'):
+def load_dataset(data_dir='../data', mode='train', sample_size=None):
 	print("Loading dataset")
 	import os.path as osp
 	data_dirs = {}
@@ -218,14 +221,14 @@ def load_dataset(data_dir='../data', toy=False, use_small=False, mode='train'):
 		data_dirs[name]['tables'] = osp.join(data_dir, name, name + '.tables.json')
 		data_dirs[name]['db'] = osp.join(data_dir, name, name + '.db')
 
-	dev_sql, dev_table = load_data(data_dirs['val']['data'], data_dirs['val']['tables'], use_small=use_small)
+	dev_sql, dev_table = load_data(data_dirs['val']['data'], data_dirs['val']['tables'], sample_size=sample_size)
 	dev_db = data_dirs['val']['db']
 	if mode == 'train':
-		train_sql, train_table = load_data(data_dirs['train']['data'], data_dirs['train']['tables'], use_small=use_small)
+		train_sql, train_table = load_data(data_dirs['train']['data'], data_dirs['train']['tables'], sample_size=sample_size)
 		train_db = data_dirs['train']['db']
 		return train_sql, train_table, train_db, dev_sql, dev_table, dev_db
 	elif mode == 'test':
-		test_sql, test_table = load_data(data_dirs['test']['data'], data_dirs['test']['tables'], use_small=use_small)
+		test_sql, test_table = load_data(data_dirs['test']['data'], data_dirs['test']['tables'], sample_size=sample_size)
 		test_db = data_dirs['test']['db']
 		return dev_sql, dev_table, dev_db, test_sql, test_table, test_db
 
@@ -485,9 +488,11 @@ def gen_bert_labels(q_seq, q_lens, sel_col_nums, where_col_nums, ans_seq, gt_con
 					sel.append(_sel[i])
 					agg.append(_agg[i])
 			sel_num_label[b] = len(sel)
-			mass = 1 / sel_num_label[b]
+
 			if sel_num_label[b] == 0:
 				mass = 1 / sel_col_nums[b]
+			else:
+				mass = 1 / sel_num_label[b]
 			sel_col_label[b][sel] = mass
 			sel_agg_label[b][sel] = agg
 
@@ -505,11 +510,16 @@ def to_batch_query(sql_data, idxes, st, ed):
 	return query_gt, table_ids
 
 
-def epoch_train(model, optimizer, batch_size, sql_data, table_data, tokenizer=None):
+def epoch_train(model, optimizer, batch_size, sql_data, table_data, tokenizer=None, loss_weight=None, max_seq_len=230):
+	if __DEBUG__:
+		import pdb
+		pdb.set_trace()
+
 	model.train()
 	perm = np.random.permutation(len(sql_data))
 	cum_loss = 0.0
-	for st in tqdm(range(len(sql_data) // batch_size + 1)):
+	for st in range(len(sql_data) // batch_size + 1):
+		# for st in tqdm(range(len(sql_data) // batch_size + 1)):
 		if st * batch_size == len(perm):
 			break
 		ed = (st + 1) * batch_size if (st + 1) * batch_size < len(perm) else len(perm)
@@ -534,7 +544,7 @@ def epoch_train(model, optimizer, batch_size, sql_data, table_data, tokenizer=No
 			# gt_cond_seq (12,3)条件列--列号，类型，值
 
 			# compute loss
-			loss = model.loss(logits, labels, q_lens, sel_col_nums)
+			loss = model.loss(logits, labels, q_lens, sel_col_nums, loss_weight)
 		else:
 
 			q_seq, gt_sel_num, col_seq, col_num, ans_seq, gt_cond_seq, header_type = to_batch_seq(sql_data, table_data,
@@ -566,7 +576,8 @@ def predict_test(model, batch_size, sql_data, table_data, output_path, tokenizer
 	model.eval()
 	perm = list(range(len(sql_data)))
 	fw = open(output_path, 'w', encoding='utf-8')
-	for st in tqdm(range(len(sql_data) // batch_size + 1)):
+	for st in range(len(sql_data) // batch_size + 1):
+	# for st in tqdm(range(len(sql_data) // batch_size + 1)):
 		if st * batch_size == len(perm):
 			break
 		ed = (st + 1) * batch_size if (st + 1) * batch_size < len(perm) else len(perm)
@@ -601,7 +612,8 @@ def epoch_acc(model, batch_size, sql_data, table_data, db_path, tokenizer=None):
 	one_acc_num, tot_acc_num, ex_acc_num = 0.0, 0.0, 0.0
 	total_error_cases = []
 	total_gt_cases = []
-	for st in tqdm(range(len(sql_data) // batch_size + 1)):
+	for st in range(len(sql_data) // batch_size + 1):
+	# for st in tqdm(range(len(sql_data) // batch_size + 1)):
 		if st * batch_size == len(perm):
 			break
 		ed = (st + 1) * batch_size if (st + 1) * batch_size < len(perm) else len(perm)
@@ -803,9 +815,10 @@ def post_process(pred, sql_data, table_data, perm, st, ed):
 				continue
 
 			col_data = []
-			for r in table['rows']:
-				if col_idx < len(r) and r[col_idx] not in {'None', 'none'}:#, 'N/A', '-', '/', ''}:
-					col_data.append(r[col_idx])
+			if 'row' in table:
+				for r in table['rows']:
+					if col_idx < len(r) and r[col_idx] not in {'None', 'none'}:#, 'N/A', '-', '/', ''}:
+						col_data.append(r[col_idx])
 			if not col_data:
 				continue
 
@@ -922,10 +935,13 @@ def gen_batch_error_cases(error_idxs, query_gt, pred_queries_post, pred_queries,
 	return error_cases, gt_cases
 
 
-def save_error_case(error_case, gt_cases, dir='./log/'):
-	import os.path as osp
-	error_fn = osp.join(dir, 'error_cases.json')
-	gt_fn = osp.join(dir, 'gt_cases.json')
+def save_error_case(error_case, gt_cases, log_dir='./log/'):
+	import os, os.path as osp
+
+	if not os.path.exists(log_dir):
+		os.makedirs(log_dir)
+	error_fn = osp.join(log_dir, 'error_cases.json')
+	gt_fn = osp.join(log_dir, 'gt_cases.json')
 	with open(error_fn, "w", encoding='utf-8') as f:
 		json.dump(error_case, f, ensure_ascii=False, indent=4)
 	with open(gt_fn, "w", encoding='utf-8') as f:

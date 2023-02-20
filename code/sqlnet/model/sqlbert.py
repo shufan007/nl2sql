@@ -3,11 +3,17 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
-from pytorch_pretrained_bert.modeling import BertPreTrainedModel, BertEncoder, BertAttention
-from pytorch_pretrained_bert import BertTokenizer, BertModel, BertAdam, BertConfig
+# from pytorch_pretrained_bert.modeling import BertPreTrainedModel, BertEncoder, BertAttention
+# from pytorch_pretrained_bert import BertTokenizer, BertModel, BertAdam, BertConfig
+
+from transformers import BertPreTrainedModel
+from transformers import BertTokenizer, BertModel, AdamW
+
 import re
 from sqlnet.strPreprocess import *
 from collections import Counter
+
+from sqlnet.glob_define import  __DEBUG__
 
 class SQLBert(BertPreTrainedModel):
 	def __init__(self, config, hidden=150, gpu=True, dropout_prob=0.2, bert_cache_dir=None):
@@ -20,7 +26,7 @@ class SQLBert(BertPreTrainedModel):
 		self.bert_cache_dir = bert_cache_dir
 
 		self.bert = BertModel(config)
-		self.apply(self.init_bert_weights)
+		# self.apply(self.init_bert_weights)
 		self.bert_hidden_size = self.config.hidden_size
 		self.W_w_conn = nn.Linear(self.bert_hidden_size, 3)
 		self.W_s_num = nn.Linear(self.bert_hidden_size, 5)
@@ -50,10 +56,15 @@ class SQLBert(BertPreTrainedModel):
 			self.cuda()
 
 	def forward(self, inputs, return_logits=True):
+		if __DEBUG__:
+			import pdb
+			pdb.set_trace()
 
 		input_seq, q_mask, sel_col_mask, sel_col_index, where_col_mask, \
 		where_col_index, col_end_index, token_type_ids, attention_mask = self.transform_inputs(inputs, dtype=torch.long)
-		out_seq, pooled_output = self.bert(input_seq, token_type_ids, attention_mask, output_all_encoded_layers=False)
+		bert_out = self.bert(input_ids=input_seq, attention_mask=attention_mask, token_type_ids=token_type_ids)
+		# print("bert_out:", bert_out)
+		out_seq, pooled_output = bert_out[0], bert_out[1]
 
 		out_seq = self.dropout(out_seq)       #获取token的output 输出[12, seq_length, 768]
 		cls_raw = out_seq[:, 0]
@@ -91,9 +102,9 @@ class SQLBert(BertPreTrainedModel):
 		where_op_logit = self.W_w_op(where_col_seq)  # (12,2col,4)
 
 		q_col_s = F.leaky_relu(
-			self.W_q_s(q_seq).unsqueeze(2) + self.W_col_s(where_col_seq).unsqueeze(1))  # (12, q_max, 2col, 768)
+			self.W_q_s(q_seq).unsqueeze(2) + self.W_col_s(where_col_seq).unsqueeze(1))  # (12, q_max, 2col, 150)
 		q_col_e = F.leaky_relu(
-			self.W_q_e(q_seq).unsqueeze(2) + self.W_col_e(where_col_seq).unsqueeze(1))  # (12, q_max, 2col, 768)
+			self.W_q_e(q_seq).unsqueeze(2) + self.W_col_e(where_col_seq).unsqueeze(1))  # (12, q_max, 2col, 150)
 		where_start_logit = self.W_w_s(q_col_s).squeeze(-1)  # (12,q_max,2col)
 		where_end_logit = self.W_w_e(q_col_e).squeeze(-1)  # (12,q_max,2col)
 
@@ -129,15 +140,23 @@ class SQLBert(BertPreTrainedModel):
 
 		q_mask, sel_col_mask, where_col_mask = q_mask.byte(), sel_col_mask.byte(), where_col_mask.byte()
 		qcol_mask = q_mask.unsqueeze(2) & where_col_mask.unsqueeze(1) #(12,qen_max,1)  (12,1,2col)
-		q_mask, sel_col_mask, where_col_mask, qcol_mask = ~q_mask, ~sel_col_mask, ~where_col_mask, ~qcol_mask
+		q_mask, sel_col_mask, where_col_mask, qcol_mask = ~q_mask.bool(), ~sel_col_mask.bool(), ~where_col_mask.bool(), ~qcol_mask.bool()
 		# do mask
 
+		"""
 		sel_col_logit = sel_col_logit.masked_fill(sel_col_mask, -1e5) #(123,col)()
 		sel_agg_logit = sel_agg_logit.masked_fill(sel_col_mask.unsqueeze(-1).expand(-1, -1, 6), -1e5)
 		where_col_logit = where_col_logit.masked_fill(where_col_mask, -1e5)
 		where_op_logit = where_op_logit.masked_fill(where_col_mask.unsqueeze(-1).expand(-1, -1, 4), -1e5)
 		where_start_logit = where_start_logit.masked_fill(qcol_mask, -1e5)
-		where_end_logit = where_end_logit.masked_fill(qcol_mask, -1e5)
+		where_end_logit = where_end_logit.masked_fill(qcol_mask, -1e5)		
+		"""
+		sel_col_logit = sel_col_logit.masked_fill(sel_col_mask.bool(), -1e5)  # (123,col)()
+		sel_agg_logit = sel_agg_logit.masked_fill(sel_col_mask.unsqueeze(-1).expand(-1, -1, 6).bool(), -1e5)
+		where_col_logit = where_col_logit.masked_fill(where_col_mask.bool(), -1e5)
+		where_op_logit = where_op_logit.masked_fill(where_col_mask.unsqueeze(-1).expand(-1, -1, 4).bool(), -1e5)
+		where_start_logit = where_start_logit.masked_fill(qcol_mask.bool(), -1e5)
+		where_end_logit = where_end_logit.masked_fill(qcol_mask.bool(), -1e5)
 
 		if return_logits:
 			return where_conn_logit, \
@@ -155,7 +174,7 @@ class SQLBert(BertPreTrainedModel):
 				   F.softmax(where_start_logit, dim=1), \
 				   F.softmax(where_end_logit, dim=1)
 
-	def loss(self, logits, labels, q_lens, col_nums):
+	def loss(self, logits, labels, q_lens, col_nums, loss_weight=None):
 
 		where_conn_logit, \
 		sel_num_logit, where_num_logit, sel_col_logit, \
@@ -187,8 +206,10 @@ class SQLBert(BertPreTrainedModel):
 		where_start_loss = F.cross_entropy(where_start_logit, where_start_label, ignore_index=-1)
 		where_end_loss = F.cross_entropy(where_end_logit, where_end_label, ignore_index=-1)
 
-		loss = where_conn_loss + sel_num_loss + where_num_loss + sel_agg_loss \
-			   + where_op_loss + sel_col_loss + where_col_loss + where_start_loss + where_end_loss
+		if loss_weight is None:
+			loss_weight = [1]*9
+		loss = where_conn_loss *loss_weight[0] + sel_num_loss*loss_weight[1] + where_num_loss*loss_weight[2] + sel_agg_loss *loss_weight[3] \
+			   + where_op_loss *loss_weight[4] + sel_col_loss *loss_weight[5] + where_col_loss *loss_weight[6] + where_start_loss*loss_weight[7] + where_end_loss*loss_weight[8]
 
 		return loss
 
@@ -202,6 +223,9 @@ class SQLBert(BertPreTrainedModel):
 				yield torch.from_numpy(np.array(x)).to(dtype)
 
 	def gen_query(self, scores, q, col, sql_data, table_data, perm, st, ed, beam=True, k=10):
+		if __DEBUG__:
+			import pdb
+			pdb.set_trace()
 
 		valid_s_agg = {
 			"real": frozenset([0, 1, 2, 3, 4, 5]),

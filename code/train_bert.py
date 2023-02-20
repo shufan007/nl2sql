@@ -1,12 +1,12 @@
 import torch
 from sqlnet.utils import *
-from sqlnet.model.sqlbert import SQLBert, BertAdam, BertTokenizer
+from sqlnet.model.sqlbert import SQLBert, BertTokenizer
+from torch.optim import AdamW
 from torch.optim import Adam
 from sqlnet.lookahead import Lookahead
 import time
 
 import argparse
-
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
@@ -14,7 +14,8 @@ if __name__ == '__main__':
 	parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
 	parser.add_argument('--lr', type=float, default=6e-6, help='base learning rate')
 	parser.add_argument('--epoch', type=int, default=100, help='Epoch number')
-	parser.add_argument('--toy', action='store_true', help='If set, use small data for fast debugging')
+	parser.add_argument('--sample_size', type=int, help='sample size')
+	parser.add_argument('--max_seq_len', type=int, default=230, help='max sequence length')
 
 	parser.add_argument('--data_dir', type=str, default='./data/')
 	parser.add_argument('--bert_model_dir', type=str, default='./model/chinese-bert_chinese_wwm_pytorch/')
@@ -23,6 +24,8 @@ if __name__ == '__main__':
 	parser.add_argument('--restore', action='store_true', help='Whether restore trained model')
 	parser.add_argument('--restore_model_path', type=str, default='./model/best_bert_model')
 
+	parser.add_argument('--loss_weight', type=str, help='loss_weight')
+
 	args = parser.parse_args()
 
 	gpu = args.gpu
@@ -30,10 +33,14 @@ if __name__ == '__main__':
 	epoch = args.epoch
 	lr = args.lr
 
-	if args.toy:
-		use_small = True
+	max_seq_len = args.max_seq_len
+	print('max_seq_len: ', max_seq_len)
+
+	if args.sample_size:
+		sample_size = args.sample_size
 	else:
-		use_small = False
+		sample_size = None
+	print('sample_size: ', sample_size, type(sample_size))
 
 	data_dir = args.data_dir
 	bert_model_dir = args.bert_model_dir
@@ -41,8 +48,10 @@ if __name__ == '__main__':
 	restore = args.restore
 	restore_model_path = args.restore_model_path
 
+	loss_weight = eval(args.loss_weight)
+
 	# load dataset
-	train_sql, train_table, train_db, dev_sql, dev_table, dev_db = load_dataset(data_dir=data_dir, use_small=use_small)
+	train_sql, train_table, train_db, dev_sql, dev_table, dev_db = load_dataset(data_dir=data_dir, sample_size=sample_size)
 	tokenizer = BertTokenizer.from_pretrained(bert_model_dir, do_lower_case=True)
 	model = SQLBert.from_pretrained(bert_model_dir)
 
@@ -50,8 +59,11 @@ if __name__ == '__main__':
 		print("Loading trained model from %s" % restore_model_path)
 		model.load_state_dict(torch.load(restore_model_path))
 
-	optimizer = BertAdam(model.parameters(), lr=lr, schedule='warmup_cosine',
-						 warmup=1.0 / epoch, t_total=epoch * (len(train_sql) // batch_size + 1))
+	# optimizer = BertAdam(model.parameters(), lr=lr, schedule='warmup_cosine',
+	#					 warmup=1.0 / epoch, t_total=epoch * (len(train_sql) // batch_size + 1))
+
+	optimizer = AdamW(model.parameters(), lr=lr, betas=(0.9, 0.999),
+					  eps=1e-06, weight_decay=0.0)
 
 	# base_opt = BertAdam(model.parameters(), lr=learning_rate, schedule='warmup_cosine',
 	#                      warmup=1.0/args.epoch, t_total=args.epoch * (len(train_sql) // batch_size + 1))
@@ -69,7 +81,7 @@ if __name__ == '__main__':
 	for i in range(args.epoch):
 		print('Epoch %d' % (i + 1))
 		# train on the train dataset
-		train_loss = epoch_train(model, optimizer, batch_size, train_sql, train_table, tokenizer=tokenizer)
+		train_loss = epoch_train(model, optimizer, batch_size, train_sql, train_table, tokenizer=tokenizer, loss_weight=loss_weight, max_seq_len=max_seq_len)
 		# evaluate on the dev dataset
 		dev_acc = epoch_acc(model, batch_size, dev_sql, dev_table, dev_db, tokenizer=tokenizer)
 

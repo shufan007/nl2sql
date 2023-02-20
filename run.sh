@@ -8,7 +8,7 @@
 
 python code/test_ensemble.py  --gpu \
                      --batch_size 24 \
-                     --data_dir /tcdata \
+                     --data_dir ./data/nl2sql-TableQA-ch \
                      --bert_model_dir ./model/ \
                      --restore_model_dir ./model/ \
                      --result_path /competition/result.json
