@@ -12,8 +12,35 @@ from sqlnet.diff2 import extact_sort
 from sqlnet.diff2 import digit_distance_search
 from functools import lru_cache
 import re
+import logging
 
 from sqlnet.glob_define import  __DEBUG__
+
+
+def get_logger(filename=None):
+    logging.basicConfig(filename=filename,
+                        level=logging.INFO,
+                        filemode='w',
+                        format='%(asctime)s - %(levelname)s: [line:%(lineno)d]: %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+    # create logger
+    logger = logging.getLogger('Automl')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s: [line:%(lineno)d]: %(message)s')
+
+    if filename:
+        fh = logging.FileHandler(filename)
+        fh.setFormatter(formatter)
+        # add handler for logger
+        if not logger.handlers:
+            logger.addHandler(fh)
+    """
+    ch = logging.StreamHandler()
+    ch.setFormatter(formatter)
+    if not logger.handlers:
+        logger.addHandler(ch)    
+    """
+    return logger
+
 
 @lru_cache(None)
 def my_scorer(t, c):
@@ -605,6 +632,11 @@ def predict_test(model, batch_size, sql_data, table_data, output_path, tokenizer
 	fw.close()
 
 def epoch_acc(model, batch_size, sql_data, table_data, db_path, tokenizer=None):
+
+	if __DEBUG__:
+		import pdb
+		pdb.set_trace()
+
 	engine = DBEngine(db_path)
 	model.eval()
 	perm = list(range(len(sql_data)))
@@ -815,7 +847,7 @@ def post_process(pred, sql_data, table_data, perm, st, ed):
 				continue
 
 			col_data = []
-			if 'row' in table:
+			if 'rows' in table:
 				for r in table['rows']:
 					if col_idx < len(r) and r[col_idx] not in {'None', 'none'}:#, 'N/A', '-', '/', ''}:
 						col_data.append(r[col_idx])

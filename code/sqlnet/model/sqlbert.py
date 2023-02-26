@@ -175,6 +175,9 @@ class SQLBert(BertPreTrainedModel):
 				   F.softmax(where_end_logit, dim=1)
 
 	def loss(self, logits, labels, q_lens, col_nums, loss_weight=None):
+		if __DEBUG__:
+			import pdb
+			pdb.set_trace()
 
 		where_conn_logit, \
 		sel_num_logit, where_num_logit, sel_col_logit, \

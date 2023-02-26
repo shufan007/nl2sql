@@ -8,23 +8,25 @@ import time
 
 import argparse
 
+logger = get_logger()
+
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--gpu', action='store_true', help='Whether use gpu')
-	parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
+	parser.add_argument('--gpu', action='store_true', default=True, help='Whether use gpu')
+	parser.add_argument('--batch_size', type=int, default=2, help='Batch size')
 	parser.add_argument('--lr', type=float, default=6e-6, help='base learning rate')
-	parser.add_argument('--epoch', type=int, default=100, help='Epoch number')
-	parser.add_argument('--sample_size', type=int, help='sample size')
+	parser.add_argument('--epoch', type=int, default=2, help='Epoch number')
+	parser.add_argument('--sample_size', type=int, default=10, help='sample size')
 	parser.add_argument('--max_seq_len', type=int, default=230, help='max sequence length')
 
-	parser.add_argument('--data_dir', type=str, default='./data/')
-	parser.add_argument('--bert_model_dir', type=str, default='./model/chinese-bert_chinese_wwm_pytorch/')
-	parser.add_argument('--model_save_path', type=str, default='./model/best_bert_model')
+	parser.add_argument('--data_dir', type=str, default='../data/nl2sql-TableQA-ch/')
+	parser.add_argument('--bert_model_dir', type=str, default='../model/chinese-bert_chinese_wwm_pytorch/')
+	parser.add_argument('--model_save_path', type=str, default='../model/best_bert_model')
 
 	parser.add_argument('--restore', action='store_true', help='Whether restore trained model')
-	parser.add_argument('--restore_model_path', type=str, default='./model/best_bert_model')
+	parser.add_argument('--restore_model_path', type=str)
 
-	parser.add_argument('--loss_weight', type=str, help='loss_weight')
+	parser.add_argument('--loss_weight', type=str, default='[1,1,1,1,1,1,1,1,1]', help='loss_weight')
 
 	args = parser.parse_args()
 
@@ -41,6 +43,7 @@ if __name__ == '__main__':
 	else:
 		sample_size = None
 	print('sample_size: ', sample_size, type(sample_size))
+	logger.info(f'sample_size: {sample_size}')
 
 	data_dir = args.data_dir
 	bert_model_dir = args.bert_model_dir
@@ -56,7 +59,7 @@ if __name__ == '__main__':
 	model = SQLBert.from_pretrained(bert_model_dir)
 
 	if restore:
-		print("Loading trained model from %s" % restore_model_path)
+		logger.info("Loading trained model from %s" % restore_model_path)
 		model.load_state_dict(torch.load(restore_model_path))
 
 	# optimizer = BertAdam(model.parameters(), lr=lr, schedule='warmup_cosine',
@@ -77,19 +80,20 @@ if __name__ == '__main__':
 	best_ex, best_ex_idx = -0.1, 0
 	best_mean, best_mean_idx = -0.1, 0
 
-	print("#" * 20 + "  Start to Train  " + "#" * 20)
+	logger.info("#" * 20 + "  Start to Train  " + "#" * 20)
 	for i in range(args.epoch):
-		print('Epoch %d' % (i + 1))
+		logger.info('Epoch %d' % (i + 1))
 		# train on the train dataset
 		train_loss = epoch_train(model, optimizer, batch_size, train_sql, train_table, tokenizer=tokenizer, loss_weight=loss_weight, max_seq_len=max_seq_len)
 		# evaluate on the dev dataset
 		dev_acc = epoch_acc(model, batch_size, dev_sql, dev_table, dev_db, tokenizer=tokenizer)
 
 		# accuracy of each sub-task
-		print(
+		logger.info(
 			'Sel-Num: %.3f, Sel-Col: %.3f, Sel-Agg: %.3f, W-Num: %.3f, W-Col: %.3f, W-Op: %.3f, W-Val: %.3f, W-Rel: %.3f' % (
 				dev_acc[0][0], dev_acc[0][1], dev_acc[0][2], dev_acc[0][3], dev_acc[0][4], dev_acc[0][5], dev_acc[0][6],
 				dev_acc[0][7]))
+
 		# save the best model
 		if dev_acc[1] > best_lf:
 			best_lf = dev_acc[1]
@@ -130,12 +134,12 @@ if __name__ == '__main__':
 			if dev_acc[0][7] > best_wr:
 				best_wr = dev_acc[0][7]
 				best_wr_idx = i + 1
-		print('Train loss = %.3f' % train_loss)
-		print('Dev Logic Form Accuracy: %.3f, Execution Accuracy: %.3f' % (dev_acc[1], dev_acc[2]))
-		print('Best Logic Form: %.3f at epoch %d' % (best_lf, best_lf_idx))
-		print('Best Execution: %.3f at epoch %d' % (best_ex, best_ex_idx))
-		print('Best Mean: %.3f at epoch %d' % (best_mean, best_mean_idx))
+		logger.info('Train loss = %.3f' % train_loss)
+		logger.info('Dev Logic Form Accuracy: %.3f, Execution Accuracy: %.3f' % (dev_acc[1], dev_acc[2]))
+		logger.info('Best Logic Form: %.3f at epoch %d' % (best_lf, best_lf_idx))
+		logger.info('Best Execution: %.3f at epoch %d' % (best_ex, best_ex_idx))
+		logger.info('Best Mean: %.3f at epoch %d' % (best_mean, best_mean_idx))
 		if (i + 1) % 10 == 0:
-			print('Best val acc: %s\nOn epoch individually %s' % (
+			logger.info('Best val acc: %s\nOn epoch individually %s' % (
 				(best_sn, best_sc, best_sa, best_wn, best_wc, best_wo, best_wv),
 				(best_sn_idx, best_sc_idx, best_sa_idx, best_wn_idx, best_wc_idx, best_wo_idx, best_wv_idx)))
